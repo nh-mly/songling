@@ -1,0 +1,7 @@
+# mujoco_ros2_control 的附加插件。这里只开一个心跳,便于确认仿真在跑。
+/**:
+  ros__parameters:
+    mujoco_plugins:
+      heart_beat_plugin:
+        type: "mujoco_ros2_control_plugins/HeartbeatPublisherPlugin"
+        update_rate: 1.0

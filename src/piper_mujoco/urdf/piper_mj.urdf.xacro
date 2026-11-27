@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="piper">
+
+  <!-- 复用官方 URDF(几何/惯量/碰撞都在),只追加 ros2_control 与 MuJoCo 硬件接口 -->
+  <xacro:include filename="$(find agx_arm_description)/agx_arm_urdf/piper/urdf/piper_with_gripper_description.xacro"/>
+
+  <!--
+    tcp_link —— MoveIt 的 SRDF 里 arm 组的链是 base_link → tcp_link,
+    但官方 piper 描述里没有这个 link,需要补一个。
+    位置 = flange_link 沿工具轴 +142.5 mm(与夹爪两指夹持中心一致)。
+  -->
+  <link name="tcp_link"/>
+  <joint name="tcp_joint" type="fixed">
+    <origin xyz="0 0 0.1425" rpy="0 0 0"/>
+    <parent link="flange_link"/>
+    <child link="tcp_link"/>
+  </joint>
+
+  <!--
+    MuJoCo 硬件接口
+    ─────────────────────────────────────────────────────────────
+    插件  : mujoco_ros2_control/MujocoSystemInterface
+    模型  : 我们复制并改过名的 MJCF(关节 joint1..6 + gripper)
+    说明  : MJCF 里 joint8 通过 <equality> 与 gripper 联动,
+            ros2_control 只暴露 gripper 一个自由度。
+  -->
+  <ros2_control name="MujocoSystem" type="system">
+    <hardware>
+      <plugin>mujoco_ros2_control/MujocoSystemInterface</plugin>
+
+      <param name="mujoco_model">$(find piper_mujoco)/mjcf/scene.xml</param>
+      <param name="sim_speed_factor">1.0</param>
+      <param name="headless">false</param>
+    </hardware>
+
+    <xacro:macro name="mj_joint" params="name init:=0.0">
+      <joint name="${name}">
+        <command_interface name="position"/>
+        <state_interface name="position">
+          <param name="initial_value">${init}</param>
+        </state_interface>
+        <state_interface name="velocity"/>
+        <state_interface name="effort"/>
+      </joint>
+    </xacro:macro>
+
+    <xacro:mj_joint name="joint1"/>
+    <xacro:mj_joint name="joint2"/>
+    <xacro:mj_joint name="joint3"/>
+    <xacro:mj_joint name="joint4"/>
+    <xacro:mj_joint name="joint5"/>
+    <xacro:mj_joint name="joint6"/>
+    <xacro:mj_joint name="gripper"/>
+
+  </ros2_control>
+</robot>

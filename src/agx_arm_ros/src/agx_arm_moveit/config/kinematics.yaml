@@ -1,0 +1,8 @@
+# 本地修改(2026-11-26):
+#   KDL 求解器在严格容差(5mm/0.05rad)下频繁无解,换成 TRAC-IK。
+#   原文件备份在 kinematics.yaml.bak-kdl
+arm:
+  kinematics_solver: trac_ik_kinematics_plugin/TRAC_IKKinematicsPlugin
+  kinematics_solver_search_resolution: 0.005
+  kinematics_solver_timeout: 0.05
+  solve_type: Speed

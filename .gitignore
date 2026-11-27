@@ -1,0 +1,23 @@
+# 编译产物
+/build/
+/install/
+/log/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+
+# 素材库 / 冗余副本（体积大，不入库）
+/agx_arm_sim/
+/agx_arm_urdf/
+/pyAgxArm/
+/offline_wheels/
+/states/
+
+# 官方 URDF 里未使用的机械臂型号（只保留 piper + agx_gripper）
+/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/nero/
+/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/piper_l/
+/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/piper_h/
+/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/piper_x/
+/src/agx_arm_ros/src/agx_arm_description/agx_arm_urdf/revo2/

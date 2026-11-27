@@ -1,0 +1,125 @@
+每次遥操作的完整命令（冷启动）
+
+前提：两台机器已开机、机械臂已上电、USB-CAN 已插好、工作区已编译过。
+步骤 1 · 两台：激活 CAN（需要 sudo）
+
+A 机和 B 机各开一个终端：
+bash
+
+sudo ~/107/songlin/scripts/can_up.sh
+
+看到 [ OK ] 20 帧 和 [ OK ] 检测到状态/关节反馈帧 就行。
+步骤 2 · 两台：加载通信环境
+
+后面每一个新终端都要先跑这一条：
+bash
+
+source ~/107/songlin/scripts/teleop_env.sh
+
+必须看到 [teleop_env] DOMAIN=66 RANGE=SUBNET。
+步骤 3 · A 机：起 leader 驱动
+
+终端 A1（起完别关）
+bash
+
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 launch agx_arm_ctrl start_single_agx_arm.launch.py \
+  namespace:=leader arm_type:=piper can_port:=can0 effector_type:=agx_gripper \
+  speed_percent:=20 auto_enable:=false control_enabled:=false
+
+等到 Agx_arm feedback is ready, control is now enabled。
+步骤 4 · B 机：起 follower 驱动
+
+终端 B1（起完别关）
+bash
+
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 launch agx_arm_ctrl start_single_agx_arm.launch.py \
+  namespace:=follower arm_type:=piper can_port:=can0 effector_type:=agx_gripper \
+  speed_percent:=60 auto_enable:=false control_enabled:=false
+
+步骤 5 · B 机：使能 + 开门闸
+
+终端 B2（新开）
+bash
+
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 service call /follower/enable_agx_arm std_srvs/srv/SetBool "{data: true}"
+ros2 service call /follower/control_enable std_srvs/srv/SetBool "{data: true}"
+
+期望 Agx_arm enabled + External control gate opened。
+步骤 6 · A 机：使能 + 零力拖动
+
+终端 A2（新开）
+bash
+
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 service call /leader/enable_agx_arm std_srvs/srv/SetBool "{data: true}"
+ros2 service call /leader/leader_mode std_srvs/srv/Empty "{}"
+
+期望 Agx_arm enabled + Leader mode ON (zero-force drag)。此时 A 变"轻"。
+步骤 7 · 任一台：检查姿态差（别跳）
+bash
+
+python3 - <<'PY'
+import math, time, rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+rclpy.init(); n=Node("cmp")
+A,F={},{}
+n.create_subscription(JointState,"/leader/feedback/joint_states",lambda m:A.update(dict(zip(m.name,m.position))),10)
+n.create_subscription(JointState,"/follower/feedback/joint_states",lambda m:F.update(dict(zip(m.name,m.position))),10)
+t=time.time()
+while (len(A)<6 or len(F)<6) and time.time()-t<12: rclpy.spin_once(n,timeout_sec=0.1)
+if len(A)<6 or len(F)<6: print("读不到数据"); raise SystemExit
+mx=0
+for i in range(1,7):
+    k=f"joint{i}"; d=math.degrees(F[k]-A[k]); mx=max(mx,abs(d))
+    print(f"  {k} A={math.degrees(A[k]):+7.2f}  B={math.degrees(F[k]):+7.2f}  差={d:+6.2f}")
+print(f"\n  最大差 {mx:.2f}°  {'✅ 可以开桥' if mx<15 else '❌ 先对齐'}")
+PY
+
+差 > 15° 就先把 A 拖近 B，或：
+bash
+
+ros2 service call /leader/leader_home std_srvs/srv/Empty "{}"
+
+步骤 8 · A 机（或 B 机）：起桥
+
+终端 A2
+bash
+
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 run piper_teleop teleop_bridge --ros-args \
+  -p max_step_deg:=3.0 -p alpha:=0.4 -p watchdog_ms:=300.0
+
+看到 已对齐,开始转发(TELEOP) 就可以用手拖 A 了。
+结束
+Code block
+
+1. A2: Ctrl-C 停桥
+2. A2: ros2 service call /leader/restore_drag_mode std_srvs/srv/Empty "{}"
+3. A1 / B1: Ctrl-C 关驱动
+
+四个终端一览
+终端	机器	跑什么
+A1	A	leader 驱动（不要关）
+A2	A	服务调用 + 桥
+B1	B	follower 驱动（不要关）
+B2	B	服务调用
+
+    除 A1/B1 外，每个新终端的第一条命令都是 source ~/107/songlin/scripts/teleop_env.sh，忘了就会"看不见对方"。
+
+出问题时的三条救命命令
+bash
+
+# B 不动 → 门闸没开
+ros2 service call /follower/control_enable std_srvs/srv/SetBool "{data: true}"
+
+# 桥报 FAULT → 确认安全后清故障
+ros2 service call /teleop_reset std_srvs/srv/Trigger "{}"
+
+# 看不见对方 → 清 DDS 缓存再看
+ros2 daemon stop && ros2 node list
+
+

@@ -1,0 +1,38 @@
+完整命令（三个终端）
+
+A — 驱动（常驻）
+zsh
+
+source ~/107/songlin/scripts/env.sh
+~/107/songlin/scripts/real_arm.sh driver
+
+B — 使能 + 回零
+zsh
+
+source ~/107/songlin/scripts/env.sh
+~/107/songlin/scripts/real_arm.sh enable
+~/107/songlin/scripts/real_arm.sh home
+
+C — MoveIt + RViz（常驻，真机会动）
+zsh
+
+source ~/107/songlin/scripts/env.sh
+~/107/songlin/scripts/real_arm.sh moveit
+
+怎么确认这条链真的接到真机了
+
+起完之后在任意终端：
+zsh
+
+# 1. 驱动节点在(证明连了真机)
+ros2 node list | grep agx_arm_ctrl
+
+# 2. 真机角度是真实值(不是全 0 就是通的)
+ros2 run piper_tools status
+
+# 3. 门闸节点在(证明有保护)
+ros2 node list | grep control_gate
+
+然后 RViz 里 Goal State → home → Plan → Execute，或者拖箭头规划小动作。
+
+真机会动，而且只有点 Execute 才动。 拖箭头、点 Plan 都不会动。
