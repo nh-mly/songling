@@ -2,8 +2,8 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>piper_teleop</name>
-  <version>0.1.0</version>
-  <description>Piper 跨局域网主从遥操作桥:leader 关节角 -> follower 位置指令</description>
+  <version>0.2.0</version>
+  <description>Piper 跨机遥操作:A 的关节角转发给 B,含一键准备与安全桥</description>
   <maintainer email="nero@example.com">nero</maintainer>
   <license>MIT</license>
 
@@ -12,6 +12,8 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_srvs</exec_depend>
+  <exec_depend>agx_arm_ctrl</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

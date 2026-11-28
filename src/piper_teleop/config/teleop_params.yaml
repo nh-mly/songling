@@ -1,0 +1,38 @@
+# 遥操作桥的参数。teleop.launch.py role:=bridge 会读这一份。
+teleop_bridge:
+  ros__parameters:
+    # 话题(命名空间由驱动 launch 的 namespace:=leader/follower 决定)
+    src_topic: /leader/feedback/joint_states
+    dst_topic: /follower/control/joint_states
+    follower_fb_topic: /follower/feedback/joint_states
+
+    # 转发频率。WiFi 用 50;换有线后可提到 200
+    rate: 50.0
+
+    # 限速:每帧最大变化(度)。速度上限 = max_step_deg × rate
+    # 3.0 × 50 = 150 °/s
+    max_step_deg: 3.0
+
+    # 一阶低通系数,1.0 = 关闭。越小越平滑但越滞后
+    alpha: 0.4
+
+    # 死区:小于此变化不转发(抑制抖动)
+    deadband_deg: 0.05
+
+    # 看门狗:超过此时间没新帧就暂停转发(follower 保持原位)
+    watchdog_ms: 300.0
+
+    # 异常检测:leader 角速度超过此值判为数据异常并锁死
+    max_vel_deg_s: 600.0
+
+    # 开局姿态差上限,超过拒绝启动(防止 follower 高速扫向 leader)
+    init_max_diff_deg: 15.0
+
+    # 零位补偿:两台零位有固定差时填入(单位:度)
+    joint_offset_deg: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+    # 是否同步夹爪
+    passthrough_gripper: true
+
+    # 状态打印周期(秒)
+    report_period_s: 5.0

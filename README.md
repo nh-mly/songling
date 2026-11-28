@@ -80,6 +80,29 @@ ros2 launch agx_arm_ctrl start_single_agx_arm.launch.py \
 2. `auto_control_gate:=true` —— 门闸节点必须起来
 3. 起 MoveIt 前检查真机是否接近零位,不一致就拒绝启动
 
+## 遥操作（跨机主从）
+
+两台机器、各自一条 CAN、同一局域网。一条命令起一套：
+
+```bash
+# 两台都要
+source ~/107/songlin/scripts/teleop_env.sh      # domain 66 + SUBNET
+
+# A 机（leader，手拖）
+ros2 launch piper_teleop teleop.launch.py role:=leader
+
+# B 机（follower，跟随）
+ros2 launch piper_teleop teleop.launch.py role:=follower
+
+# 任一台（起桥）
+ros2 launch piper_teleop teleop.launch.py role:=bridge
+```
+
+`role:=leader|follower` 会自动：起驱动 → 等就绪 → 使能 → 回零 → 验证 → 进模式。
+
+详细步骤与故障处理见 [`docs/遥操作_命令手册.md`](docs/遥操作_命令手册.md)，
+设计取舍见 [`docs/遥操作_v1.0.md`](docs/遥操作_v1.0.md)。
+
 ## MuJoCo 仿真
 
 ```bash

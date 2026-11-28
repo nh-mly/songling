@@ -5,6 +5,8 @@ find_package(ament_cmake REQUIRED)
 
 install(PROGRAMS scripts/teleop_bridge.py
         DESTINATION lib/${PROJECT_NAME} RENAME teleop_bridge)
-install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/teleop_setup.py
+        DESTINATION lib/${PROJECT_NAME} RENAME teleop_setup)
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 
 ament_package()
