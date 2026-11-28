@@ -8,8 +8,8 @@
     ros2 run piper_teleop teleop_setup --ros-args -p role:=follower
 
 做的事(按顺序,任一步失败就报错停下):
-    leader   : 等驱动 → enable → move_home → 验证回零 → leader_mode(零力拖动)
-    follower : 等驱动 → enable → move_home → 验证回零 → control_enable(开控制门闸)
+    leader   : 等驱动 → 规范化(0xFC) → enable → 开门闸 → 回零 → 验证 → leader_mode(零力拖动)
+    follower : 等驱动 → 规范化(0xFC) → enable → 开门闸 → 回零 → 验证
 
 为什么要有它:
     · move_home 在未使能时会静默失败(只打一行 warn,不返回错误)
@@ -85,21 +85,47 @@ class TeleopSetup(Node):
         vals = [abs(math.degrees(self.joints[j])) for j in ARM_JOINTS if j in self.joints]
         return max(vals) if vals else 999.0
 
-    def _wait_motion_done(self, timeout=15.0, eps=0.05):
-        """等到相邻两次采样几乎不变。"""
+    def _wait_motion_done(self, timeout=15.0, eps=0.05, min_wait=1.5, stable_n=5):
+        """等到运动结束。
+
+        注意:必须有 min_wait —— 指令刚发出时臂还没开始动,
+        立刻判断会误认为"已到位"(这是 move_home 报成功却没动的根源)。
+        还需要连续 stable_n 次采样都稳定,避免单帧抖动误判。
+        """
         t0 = time.time()
         prev = dict(self.joints)
+        stable = 0
         while time.time() - t0 < timeout:
             rclpy.spin_once(self, timeout_sec=0.1)
+            elapsed = time.time() - t0
             if not prev or len(self.joints) < 6:
                 prev = dict(self.joints)
                 continue
             delta = max(abs(math.degrees(self.joints.get(j, 0) - prev.get(j, 0)))
                         for j in ARM_JOINTS)
-            if delta < eps:
-                return True
+            if elapsed > min_wait and delta < eps:
+                stable += 1
+                if stable >= stable_n:
+                    return True
+            else:
+                stable = 0
             prev = dict(self.joints)
         return False
+
+    def _publish_zeros(self, ns, duration=0.6):
+        """通过 control/move_j 把六个关节命令到 0(比 move_home 服务可靠)。"""
+        from std_msgs.msg import Header
+        pub = self.create_publisher(JointState, f"{ns}/control/move_j", 10)
+        msg = JointState()
+        msg.header = Header()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.name = list(ARM_JOINTS)
+        msg.position = [0.0] * 6
+        t0 = time.time()
+        while time.time() - t0 < duration:
+            pub.publish(msg)
+            rclpy.spin_once(self, timeout_sec=0.02)
+        self.destroy_publisher(pub)
 
     # ------------------------------------------------------------------ 流程
     def run_setup(self) -> bool:
@@ -112,6 +138,16 @@ class TeleopSetup(Node):
                 f"j{i}={math.degrees(self.joints[f'joint{i}']):+6.2f}"
                 for i in range(1, 7)))
 
+        # 1.5 规范化:清除上一次遗留的 Leader 模式
+        # set_leader_mode() 发的 0xFA 会被控制器持久化,下次上电臂仍处于 Leader 模式,
+        # 此时它把关节角当"控制帧(0x15x)"广播,不发反馈帧(0x2Ax),
+        # 驱动会报 "Failed to get firmware version" 并退出。
+        # 修复:先设回 Follower 模式(0xFC)。注意 0x00 是空操作,不能用来复位。
+        res = self._call(Empty, f"{self.ns}/follower_mode", Empty.Request())
+        if res is not None:
+            self.get_logger().info("已规范化:清除遗留的 Leader 模式(0xFC)")
+        time.sleep(0.5)
+
         # 2. 使能
         res = self._call(SetBool, f"{self.ns}/enable_agx_arm", SetBool.Request(data=True))
         if res is None or not res.success:
@@ -120,12 +156,16 @@ class TeleopSetup(Node):
         self.get_logger().info(f"使能: {res.message}")
         time.sleep(1.0)
 
+        # 2.5 打开控制门闸(后面用 control/move_j 回零需要它)
+        res = self._call(SetBool, f"{self.ns}/control_enable", SetBool.Request(data=True))
+        if res is not None:
+            self.get_logger().info(f"控制门闸: {res.message}")
+
         # 3. 回零(带验证与重试)
+        # 不用 move_home 服务:它调 move_j 后立即判断"没动=到位",
+        # 导致日志报成功但臂没动(实测踩过)。改走 control/move_j + 显式等待。
         for attempt in range(1, self.home_retries + 1):
-            res = self._call(Empty, f"{self.ns}/move_home", Empty.Request())
-            if res is None:
-                self.get_logger().error("move_home 服务无响应")
-                return False
+            self._publish_zeros(self.ns)
             self._wait_motion_done()
             worst = self._max_abs_deg()
             self.get_logger().info(
@@ -133,16 +173,25 @@ class TeleopSetup(Node):
             if worst <= self.home_tol:
                 break
             if attempt == self.home_retries:
-                self.get_logger().warn(
-                    f"回零后仍有 {worst:.1f}° 偏差,继续(请人工确认是否卡阻)")
+                # 回零失败绝不能继续进零力/跟随模式:
+                # 姿态未知时把臂交给桥,可能造成大幅扫动或撞机
+                self.get_logger().error(
+                    f"回零失败: 重试 {self.home_retries} 次后仍有 {worst:.1f}° 偏差"
+                    f"(阈值 {self.home_tol:.1f}°)。已中止,不进入 {self.role} 模式。"
+                    f"请检查: 机械臂是否卡住/被压住? 零位是否被外力挡住?")
+                return False
 
         # 4. 进入对应模式
         if self.role == "leader":
-            res = self._call(Empty, f"{self.ns}/leader_mode", Empty.Request())
-            if res is None:
-                self.get_logger().error("leader_mode 调用失败")
-                return False
-            self.get_logger().info("已进入零力拖动(leader):手臂变轻,松手停在原地")
+            # 注意:不要调用 leader_mode(0xFA)!
+            # 实测 0xFA 会被控制器持久化,且该模式下臂不再发 0x2Ax 反馈帧,
+            # 驱动会判定 "Agx_arm feedback lost" 并停发所有数据(包括 leader 数据)。
+            # 正确做法:臂保持普通模式,由人按下机械臂上的拖动/示教按键开启重力补偿,
+            # 此时反馈帧照常上报(实测 200 Hz),驱动可正常读取。
+            self.get_logger().info("=" * 56)
+            self.get_logger().info("现在请按下机械臂上的【拖动/示教按键】开启重力补偿")
+            self.get_logger().info("(LED 亮起即生效,臂会变轻,可手拖)")
+            self.get_logger().info("=" * 56)
         else:
             res = self._call(SetBool, f"{self.ns}/control_enable",
                              SetBool.Request(data=True))

@@ -1,0 +1,164 @@
+================================================================================
+遥操作 · 2026-11-28 实测命令记录
+================================================================================
+这是当天最后一次成功跑通的完整命令序列,照抄即可。
+
+环境: A(leader) 192.168.3.232 zsh   /   B(follower) 192.168.3.179 bash
+两台: Ubuntu 24.04 + ROS 2 Jazzy,各接一个 USB-CAN,同一 WiFi
+
+--------------------------------------------------------------------------------
+0. 前置检查(两台都做)
+--------------------------------------------------------------------------------
+sudo ~/107/songlin/scripts/can_up.sh
+
+  期望: [ OK ] 20 帧  和  [ OK ] 检测到状态/关节反馈帧
+
+测帧率(不需要 sudo):
+
+for i in 1 2 3; do A=$(cat /sys/class/net/can0/statistics/rx_packets); sleep 3; \
+  B=$(cat /sys/class/net/can0/statistics/rx_packets); echo "$((B-A)) 帧/3秒"; done
+
+  健康值: 约 7000 帧/3秒 (2300+ 帧/秒)
+  今天实测: A=2325 帧/秒   B=2355 帧/秒
+
+--------------------------------------------------------------------------------
+1. A 机 · 终端 A1 (leader)
+--------------------------------------------------------------------------------
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 launch piper_teleop teleop.launch.py role:=leader
+
+  期望日志(按顺序):
+    当前角度: j1=... j2=...
+    已规范化:清除遗留的 Leader 模式(0xFC)
+    使能: Agx_arm enabled
+    控制门闸: External control gate opened
+    回零第 1 次: 最大偏差 0.00° (阈值 3.0°)
+    现在请按下机械臂上的【拖动/示教按键】开启重力补偿
+    ==== leader 准备完成 ====
+
+  >>> 然后用手按下机械臂上的【拖动/示教按键】,LED 亮起 <<<
+      臂会变轻,可以手拖;反馈帧照常 200 Hz
+
+  !! 不要用 ros2 service call /leader/leader_mode
+     它发的 0xFA 会被控制器持久化,下次上电臂就不发反馈帧了。
+
+--------------------------------------------------------------------------------
+2. B 机 · 终端 B1 (follower)
+--------------------------------------------------------------------------------
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 launch piper_teleop teleop.launch.py role:=follower
+
+  期望日志:
+    已规范化:清除遗留的 Leader 模式(0xFC)
+    使能: Agx_arm enabled
+    控制门闸: External control gate opened
+    回零第 1 次: 最大偏差 X.XX° (阈值 3.0°)
+    ==== follower 准备完成 ====
+
+  (B 用 speed_percent:=60,比 A 的 20 快,跟随才跟得上)
+
+--------------------------------------------------------------------------------
+3. 姿态检查 (任一台,A2 或 B2 新终端)
+--------------------------------------------------------------------------------
+python3 - <<'PY'
+import math, time, rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import JointState
+rclpy.init(); n=Node("cmp")
+A,F={},{}
+n.create_subscription(JointState,"/leader/feedback/joint_states",lambda m:A.update(dict(zip(m.name,m.position))),10)
+n.create_subscription(JointState,"/follower/feedback/joint_states",lambda m:F.update(dict(zip(m.name,m.position))),10)
+t=time.time()
+while (len(A)<6 or len(F)<6) and time.time()-t<12: rclpy.spin_once(n,timeout_sec=0.1)
+if len(A)<6 or len(F)<6: print("读不到数据"); raise SystemExit
+mx=0
+for i in range(1,7):
+    k=f"joint{i}"; d=math.degrees(F[k]-A[k]); mx=max(mx,abs(d))
+    print(f"  {k} A={math.degrees(A[k]):+7.2f}  B={math.degrees(F[k]):+7.2f}  差={d:+6.2f}")
+print(f"\n  最大差 {mx:.2f}°  {'可以开桥' if mx<15 else '先对齐'}")
+PY
+
+  判据: 最大差 < 15° 才能起桥
+
+--------------------------------------------------------------------------------
+4. 起桥 (任一台,不能和 launch 共用终端)
+--------------------------------------------------------------------------------
+source ~/107/songlin/scripts/teleop_env.sh
+ros2 launch piper_teleop teleop.launch.py role:=bridge
+
+  期望日志:
+    bridge /leader/feedback/joint_states -> /follower/control/joint_states @ 50 Hz
+    已对齐,开始转发(TELEOP)
+
+  之后每 5 秒打印一次:
+    已发 N 帧 | 跳过 M | 本帧滞后 X.XXdeg
+
+--------------------------------------------------------------------------------
+5. 拖动
+--------------------------------------------------------------------------------
+用手拖 A(确认拖动按键 LED 是亮的),B 跟着动。
+
+  今天实测的桥日志(运行时约 75 秒):
+    已发 2241 帧 | 跳过 1652 | 本帧滞后 1.26deg
+    已发 2872 帧 | 跳过 1856 | 本帧滞后 1.90deg
+    已发 3076 帧 | 跳过 1903 | 本帧滞后 3.85deg
+    已发 3306 帧 | 跳过 1924 | 本帧滞后 0.62deg
+    已发 3690 帧 | 跳过 2041 | 本帧滞后 1.55deg
+
+  判读:
+    本帧滞后 0.1~4°  -> 跟随良好(限速没饱和)
+    本帧滞后 > 10°   -> 拖太快,超出 150 °/s 上限
+    跳过 数很大      -> 正常(手不动时桥不重复发)
+
+--------------------------------------------------------------------------------
+6. 停止(按顺序)
+--------------------------------------------------------------------------------
+  1) 桥终端: Ctrl-C
+  2) A / B 的 launch 终端: Ctrl-C
+  3) 如果 A 的拖动按键 LED 还亮着 -> 按一下关掉,臂会重新锁位
+
+  不需要发 restore_drag_mode:没用 0xFA,臂始终在普通模式。
+
+================================================================================
+今天踩到的坑(详细版见 docs/踩坑记录.md #31~#36)
+================================================================================
+
+① 0xFA 会被持久化(最坑的一个)
+   现象: 一上电臂就"飘"(重力补偿),驱动报 Failed to get firmware version,
+         CAN 帧率几乎 0。
+   原因: 之前调用过 leader_mode,发了 0x470 + 0xFA,控制器记进了 Flash。
+         Leader 模式下臂把关节角当控制帧(0x15x)广播,不再发反馈帧(0x2Ax)。
+   恢复: cansend can0 470#FC00000000000000
+         注意 0x470#00 是空操作(协议里 0x00 = 无效),不能复位!
+
+② move_home 服务不可靠
+   现象: 日志报 moved to home position successfully,但臂一动不动。
+   原因: 驱动 _wait_motion_done() 把"还没开始动"当成"已到位"。
+   做法: 用 control/move_j 发零位,或重复调用 move_home。
+
+③ teleop_env.sh 在 zsh 下静默失效
+   现象: 打印 DOMAIN=66 看着正常,但 ros2 launch 报 Package not found。
+   原因: 脚本用 ${BASH_SOURCE[0]} 推导路径,zsh 里这个变量是空的。
+   修法: 已改为固定路径 $HOME/107/songlin + 区分 setup.zsh / setup.bash。
+   自检: ros2 pkg prefix piper_teleop 必须有输出。
+
+④ Device is DOWN 不是臂坏了
+   那是 socketcan 接口没 up,跑 can_up.sh 即可。
+
+⑤ 关节读数超限/跳变时,先看帧类型
+   timeout 3 candump can0 | awk '{print $2}' | sort | uniq -c
+     有 2A1~2A8        -> 反馈正常,数值可信
+     只有 151/155/156/157 -> 臂在 Leader 模式,数值不可信(见 ①)
+     什么都没有         -> 接口或物理连接问题
+
+================================================================================
+关键参数(改 config/teleop_params.yaml)
+================================================================================
+rate              50.0   转发频率 Hz
+max_step_deg      3.0    每帧最大变化 -> 速度上限 3.0 x 50 = 150 °/s
+alpha             0.4    一阶低通
+watchdog_ms       300    断流保护,follower 保持原位
+init_max_diff_deg 15     开局姿态差上限,超过拒绝启动
+max_vel_deg_s     600    判异常的角速度阈值
+passthrough_gripper true 是否同步夹爪
+================================================================================
